@@ -59,8 +59,8 @@ Backend: `http://127.0.0.1:8000/`, Django admin: `http://127.0.0.1:8000/admin/`.
 python manage.py test
 ```
 
-Само едно приложение: `python manage.py test accounts` или
-`python manage.py test questions`.
+Само едно приложение: `python manage.py test accounts`, `python manage.py test questions`,
+`python manage.py test games`.
 
 ## Frontend
 
@@ -99,3 +99,4 @@ Authentication: Django session authentication. Unsafe заявките изис�
 | `m0-setup` | Начална структура, Django + DRF, React + Vite |
 | `m1-auth` | Custom user, профил, регистрация, вход, изход, `/me` |
 | `m2-question-bank` | Категории, въпроси, answer options, fixture |
+| `m3-games` | Игри, участници, рундове, отговори |
