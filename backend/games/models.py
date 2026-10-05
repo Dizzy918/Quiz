@@ -66,6 +66,16 @@ class GamePlayer(models.Model):
 
 
 class Round(models.Model):
+    """One round of a game, played with exactly one question.
+
+    ``question_type`` says which of the two question columns is in use. It
+    repeats what the filled column already implies, but it is what the game
+    reads to know which kind of answer to expect, so the two can never be
+    allowed to drift: ``round_has_exactly_one_question`` below rejects any
+    row where the type and the filled column disagree, and ``clean`` reports
+    the same thing with a readable message.
+    """
+
     PENDING = "pending"
     OPEN = "open"
     CLOSED = "closed"
