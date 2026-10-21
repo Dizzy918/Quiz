@@ -1,6 +1,8 @@
+import random
+
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.db import models
+from django.db import models, transaction
 from django.db.models import Q
 
 from questions.models import AnswerOption, ChoiceQuestion, NumericQuestion
@@ -37,7 +39,17 @@ class Game(models.Model):
 
 
 class GamePlayer(models.Model):
-    """A single user taking part in a single game."""
+    RED = "red"
+    BLUE = "blue"
+    GREEN = "green"
+    YELLOW = "yellow"
+
+    COLOR_CHOICES = [
+        (RED, "Red"),
+        (BLUE, "Blue"),
+        (GREEN, "Green"),
+        (YELLOW, "Yellow"),
+    ]
 
     game = models.ForeignKey(Game, on_delete=models.CASCADE, related_name="players")
     user = models.ForeignKey(
@@ -46,6 +58,7 @@ class GamePlayer(models.Model):
         related_name="game_players",
     )
     player_order = models.PositiveSmallIntegerField()
+    color = models.CharField(max_length=20, choices=COLOR_CHOICES, default=RED)
     score = models.IntegerField(default=0)
     is_active = models.BooleanField(default=True)
     joined_at = models.DateTimeField(auto_now_add=True)
@@ -65,17 +78,83 @@ class GamePlayer(models.Model):
         return f"{self.user} in game {self.game_id}"
 
 
+class WaitingPlayer(models.Model):
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="waiting_entry",
+    )
+    joined_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["joined_at"]
+
+    def __str__(self):
+        return f"{self.user} waiting"
+
+    @classmethod
+    def busy_user_ids(cls):
+        return GamePlayer.objects.filter(
+            game__status__in=[Game.WAITING, Game.IN_PROGRESS, "active"]
+        ).values_list("user_id", flat=True)
+
+    @classmethod
+    def can_wait(cls, user):
+        return not GamePlayer.objects.filter(
+            user=user,
+            game__status__in=[Game.WAITING, Game.IN_PROGRESS, "active"],
+        ).exists()
+
+    @classmethod
+    def enqueue(cls, user):
+        if cls.objects.filter(user=user).exists():
+            return False
+        if not cls.can_wait(user):
+            return False
+
+        cls.objects.create(user=user)
+        cls.try_form_game()
+        return True
+
+    @classmethod
+    def withdraw(cls, user):
+        deleted, _ = cls.objects.filter(user=user).delete()
+        return deleted > 0
+
+    @classmethod
+    def try_form_game(cls):
+        with transaction.atomic():
+            eligible = list(
+                cls.objects.select_for_update()
+                .exclude(user_id__in=cls.busy_user_ids())
+                .select_related("user")
+            )
+            if len(eligible) < 3:
+                return None
+
+            chosen = random.sample(eligible, 3)
+            available_colors = [choice[0] for choice in GamePlayer.COLOR_CHOICES]
+            chosen_colors = random.sample(available_colors, 3)
+
+            game = Game.objects.create(
+                created_by=chosen[0].user,
+                status=Game.WAITING,
+            )
+
+            for order, (entry, color) in enumerate(zip(chosen, chosen_colors), start=1):
+                GamePlayer.objects.create(
+                    game=game,
+                    user=entry.user,
+                    player_order=order,
+                    color=color,
+                    score=0,
+                )
+
+            cls.objects.filter(pk__in=[entry.pk for entry in chosen]).delete()
+            return game
+
+
 class Round(models.Model):
-    """One round of a game, played with exactly one question.
-
-    ``question_type`` says which of the two question columns is in use. It
-    repeats what the filled column already implies, but it is what the game
-    reads to know which kind of answer to expect, so the two can never be
-    allowed to drift: ``round_has_exactly_one_question`` below rejects any
-    row where the type and the filled column disagree, and ``clean`` reports
-    the same thing with a readable message.
-    """
-
     PENDING = "pending"
     OPEN = "open"
     CLOSED = "closed"
@@ -147,7 +226,6 @@ class Round(models.Model):
 
     @property
     def question(self):
-        """The one question this round is played with."""
         return (
             self.choice_question
             if self.question_type == self.CHOICE
@@ -175,8 +253,6 @@ class Round(models.Model):
 
 
 class RoundAnswer(models.Model):
-    """One player's answer in one round."""
-
     round = models.ForeignKey(Round, on_delete=models.CASCADE, related_name="answers")
     player = models.ForeignKey(
         GamePlayer, on_delete=models.CASCADE, related_name="answers"
